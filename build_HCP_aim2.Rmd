@@ -1,0 +1,632 @@
+---
+title: "Build HCP Data"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(tidyverse) # for breathing
+library(readxl) # to read excel files into R
+library(R.matlab) # to read matlab files into R
+library(Matrix)
+```
+
+Build HCP Dataset for degree anlysis (main text)
+```{r}
+##### ----- Data Read-in ----- #####
+
+# Read-in Demographic Data
+HCP_dem <- as.data.frame(read_excel("Demographics_Restricted.xlsx"))
+rownames(HCP_dem) <- HCP_dem$Subject
+HCP_dem_unrestricted <- as.data.frame(read_csv("Demographics_Unrestricted.csv"))
+rownames(HCP_dem_unrestricted) <- HCP_dem_unrestricted$Subject
+
+# Add variable to HCP_dem dataset letting us know which subjects got QC'ed bad
+HCP_dem$QC_Bad <- HCP_dem$Subject %in% read.csv("QC_badSubjects.csv")[,1]
+
+### Read-in Connection Matrices ###
+
+# List all files available in the folder "Connection Matrices"
+connmat_files <- list.files("Connection Matrices")
+
+# Add variables to HCP_dem letting us know which types of connection matrices are available for each subject
+HCP_dem$rest_check <- paste0(HCP_dem$Subject,"_rest_Aij.mat") %in% connmat_files
+HCP_dem$WM_check <- paste0(HCP_dem$Subject,"_WM_Aij.mat") %in% connmat_files
+
+# Build both a matrix and list with all subjects WM connection files
+#   list: each element of the list contains that subject's connection matrix
+#   degree: each row contains the degree of each node for that subject
+#   top20: each row is binary, 1 if node is in top 20, 0 if not
+WM_degree <- as.matrix(read.csv("WM_regression_2b_locs_wei_deg.csv",header=F))
+rownames(WM_degree) <- WM_degree[,1]
+WM_degree <- WM_degree[,-c(1,270)]
+colnames(WM_degree) <- paste0("node_",1:268)
+
+WM_top20 <- WM_degree
+for(id in row.names(WM_degree)) {
+  WM_top20[id,] <- WM_degree[id,] > quantile(WM_degree[id,],1-.2)
+}
+
+# Build both a matrix and list with all subjects rest connection files
+rest_list <- list()
+rest_degree <- matrix(nrow=sum(HCP_dem$rest_check),ncol=268,dimnames=list(HCP_dem$Subject[HCP_dem$rest_check],NULL))
+row.names(rest_degree) <- HCP_dem$Subject[HCP_dem$rest_check]
+rest_top20 <- rest_degree
+for(id in row.names(rest_degree)) {
+  rest_list[[id]] <- readMat(paste0("Connection Matrices/",id,"_rest_Aij.mat"))$aij/(2^15)
+  #rest_list[[id]][rest_list[[id]] < quantile(rest_list[[id]][upper.tri(rest_list[[id]])],0.9)] <- 0
+  #rest_list[[id]][rest_list[[id]] > 0] <- 1
+  rest_degree[id,] <- rowSums(pmax(rest_list[[id]],0))
+  rest_top20[id,] <- rest_degree[id,] > quantile(rest_degree[id,],1-.2)
+}
+
+# Build Distance Matrices for WM
+WM_dmat_jaccard <- matrix(0,nrow=sum(HCP_dem$WM_check),ncol=sum(HCP_dem$WM_check),dimnames=list(HCP_dem$Subject[HCP_dem$WM_check],HCP_dem$Subject[HCP_dem$WM_check]))
+WM_dmat_ks <- WM_dmat_euc <- WM_dmat_mink14 <- WM_dmat_jaccard 
+# Same thing for Covariates
+WM_FluidIntl = WM_Gender = WM_Age = WM_Education = WM_BMI = WM_Race = WM_Ethnicity = WM_Handedness = WM_Income = WM_DSM4_Alc_Abuse = WM_DSM4_Alc_Dep = WM_SmokeStatus = WM_ID1 = WM_ID2 = WM_dmat_jaccard
+
+WM_df <- matrix(NA,nrow=choose(sum(HCP_dem$WM_check),2),ncol=18,dimnames = list(NULL,c("ID1","ID2","FluidIntl","Gender","Age","Education","BMI","Race","Ethnicity","Handedness","Income","DSM4_Alc_Abuse","DSM4_Alc_Dep","SmokeStatus","EUC","JACCARD","KS","Mink_14")))
+
+counter = 1
+
+for(i in colnames(WM_dmat_ks)) {
+    for(j in colnames(WM_dmat_ks)[-c(1:match(i,colnames(WM_dmat_ks)))]) {
+      
+      WM_df[counter,"ID1"] <- i
+      WM_df[counter,"ID2"] <- j
+
+      WM_FluidIntl[i,j] = WM_FluidIntl[j,i] = WM_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+      WM_Gender[i,j] = WM_Gender[j,i] = WM_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+      WM_Age[i,j] = WM_Age[j,i] = WM_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+      WM_Education[i,j] = WM_Education[j,i] = WM_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+      WM_BMI[i,j] = WM_BMI[j,i] = WM_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+      WM_Race[i,j] = WM_Race[j,i] = WM_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+      WM_Ethnicity[i,j] = WM_Ethnicity[j,i] = WM_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+      WM_Handedness[i,j] = WM_Handedness[j,i] = WM_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+      WM_Income[i,j] = WM_Income[j,i] = WM_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+      WM_DSM4_Alc_Abuse[i,j] = WM_DSM4_Alc_Abuse[j,i] = WM_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+      WM_DSM4_Alc_Dep[i,j] = WM_DSM4_Alc_Dep[j,i] = WM_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+      WM_SmokeStatus[i,j] = WM_SmokeStatus[j,i] = WM_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+      
+      WM_dmat_jaccard[i,j] = WM_dmat_jaccard[j,i] = WM_df[counter,"JACCARD"] = sum(WM_top20[i,]==WM_top20[j,])/268
+      WM_dmat_ks[i,j] = WM_dmat_ks[j,i] = WM_df[counter,"KS"] = ks.test(WM_degree[i,],WM_degree[j,])$statistic
+      WM_dmat_euc[i,j] = WM_dmat_euc[j,i] = WM_df[counter,"EUC"] = dist(rbind(WM_degree[i,],WM_degree[j,]),method = "euclidean")
+      WM_dmat_mink14[i,j] = WM_dmat_mink14[j,i] = WM_df[counter,"Mink_14"] = dist(rbind(WM_degree[i,],WM_degree[j,]),method = "minkowski",p=1.4)
+      
+      counter = counter + 1
+    }
+}
+
+# Build Distance Matrices for rest
+rest_dmat_jaccard <- matrix(0,nrow=sum(HCP_dem$rest_check),ncol=sum(HCP_dem$rest_check),dimnames=list(HCP_dem$Subject[HCP_dem$rest_check],HCP_dem$Subject[HCP_dem$rest_check]))
+rest_dmat_ks <- rest_dmat_euc <- rest_dmat_mink14 <- rest_dmat_jaccard
+# Same thing for Covariates
+rest_FluidIntl = rest_Gender = rest_Age = rest_Education = rest_BMI = rest_Race = rest_Ethnicity = rest_Handedness = rest_Income = rest_DSM4_Alc_Abuse = rest_DSM4_Alc_Dep = rest_SmokeStatus = rest_ID1 = rest_ID2 = rest_dmat_jaccard
+
+rest_df <- matrix(NA,nrow=choose(sum(HCP_dem$rest_check),2),ncol=18,dimnames = list(NULL,c("ID1","ID2","FluidIntl","Gender","Age","Education","BMI","Race","Ethnicity","Handedness","Income","DSM4_Alc_Abuse","DSM4_Alc_Dep","SmokeStatus","EUC","JACCARD","KS","Mink_14")))
+
+counter = 1
+
+for(i in colnames(rest_dmat_ks)) {
+    for(j in colnames(rest_dmat_ks)[-c(1:match(i,colnames(rest_dmat_ks)))]) {
+      
+      rest_df[counter,"ID1"] <- i
+      rest_df[counter,"ID2"] <- j
+
+      rest_FluidIntl[i,j] = rest_FluidIntl[j,i] = rest_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+      rest_Gender[i,j] = rest_Gender[j,i] = rest_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+      rest_Age[i,j] = rest_Age[j,i] = rest_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+      rest_Education[i,j] = rest_Education[j,i] = rest_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+      rest_BMI[i,j] = rest_BMI[j,i] = rest_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+      rest_Race[i,j] = rest_Race[j,i] = rest_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+      rest_Ethnicity[i,j] = rest_Ethnicity[j,i] = rest_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+      rest_Handedness[i,j] = rest_Handedness[j,i] = rest_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+      rest_Income[i,j] = rest_Income[j,i] = rest_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+      rest_DSM4_Alc_Abuse[i,j] = rest_DSM4_Alc_Abuse[j,i] = rest_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+      rest_DSM4_Alc_Dep[i,j] = rest_DSM4_Alc_Dep[j,i] = rest_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+      rest_SmokeStatus[i,j] = rest_SmokeStatus[j,i] = rest_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+      
+      rest_dmat_jaccard[i,j] = rest_dmat_jaccard[j,i] = rest_df[counter,"JACCARD"] = sum(rest_top20[i,]==rest_top20[j,])/268
+      rest_dmat_ks[i,j] = rest_dmat_ks[j,i] = rest_df[counter,"KS"] = ks.test(rest_degree[i,],rest_degree[j,])$statistic
+      rest_dmat_euc[i,j] = rest_dmat_euc[j,i] = rest_df[counter,"EUC"] = dist(rbind(rest_degree[i,],rest_degree[j,]),method = "euclidean")
+      rest_dmat_mink14[i,j] = rest_dmat_mink14[j,i] = rest_df[counter,"Mink_14"] = dist(rbind(rest_degree[i,],rest_degree[j,]),method = "minkowski",p=1.4)
+      
+      counter = counter + 1
+    }
+}
+
+save.image("HCP_builtdata_degree.RData")
+##### ------------------------ #####
+```
+
+Load Built degree Dataset and do Analysis
+```{r}
+load("HCP_builtdata_degree.RData")
+
+WM_df <- remove_missing(as.data.frame(WM_df))
+WM_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(WM_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)
+WM_dat <- WM_df %>% subset(ID1 %in% WM_IDs) %>% subset(ID2 %in% WM_IDs)
+WM_dat[,3:18] <- apply(WM_dat[,3:18], 2, as.numeric)
+WM_lvls <- unique(c(WM_dat[,"ID1"],WM_dat[,"ID2"]))
+
+rest_df <- remove_missing(as.data.frame(rest_df))
+rest_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(rest_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)
+rest_dat <- rest_df %>% subset(ID1 %in% rest_IDs) %>% subset(ID2 %in% rest_IDs)
+rest_dat[,3:18] <- apply(rest_dat[,3:18], 2, as.numeric)
+rest_lvls <- unique(c(rest_dat[,"ID1"],rest_dat[,"ID2"]))
+
+lvls <- intersect(WM_lvls,rest_lvls)
+
+WM_dat <- WM_dat %>% select(ID1,ID2,FluidIntl,Age,DSM4_Alc_Abuse,DSM4_Alc_Dep,BMI,Education,Ethnicity,Gender,Handedness,Income,Race,SmokeStatus,KS,JACCARD,Mink_14,EUC)
+WM_dat <- WM_dat %>% subset(ID1 %in% lvls) %>% subset(ID2 %in% lvls)
+WM_dat[,lvls] <- model.matrix(~factor(WM_dat[,"ID1"],levels=lvls)-1) + model.matrix(~factor(WM_dat[,"ID2"],levels=lvls)-1)
+WM_dat <- WM_dat %>% select(-ID1,-ID2)
+
+ks_results_WM <- summary(lm(KS~.-1-EUC-JACCARD-Mink_14,data=WM_dat))$coefficients
+jaccard_results_WM <- summary(lm(JACCARD~.-1-EUC-KS-Mink_14,data=WM_dat))$coefficients
+mink14_results_WM <- summary(lm(Mink_14~.-1-EUC-KS-JACCARD,data=WM_dat))$coefficients
+euclidean_results_WM <- summary(lm(EUC~.-1-JACCARD-KS-Mink_14,data=WM_dat))$coefficients
+
+write.csv(cbind(ks_results_WM,jaccard_results_WM,mink14_results_WM,euclidean_results_WM),file="hcp_results_WM_degree.csv")
+# write.csv(WM_top20[row.names(HCP_dem_unrestricted[as.character(WM_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR <= quantile(PMAT24_A_CR,0.25))),],file="HCP_WM_degree_Jaccard_top20_FluidIntl_bot25.csv")
+# write.csv(WM_top20[row.names(HCP_dem_unrestricted[as.character(WM_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR >= quantile(PMAT24_A_CR,0.75))),],file="HCP_WM_degree_Jaccard_top20_FluidIntl_top25.csv")
+
+# round(jaccard_results_WM$coefficients[1:12,c(1,2,4)],5)
+# round(ks_results_WM$coefficients[1:12,c(1,2,4)],5)
+# round(euclidean_results_WM$coefficients[1:12,c(1,2,4)],5)
+# round(mink14_results_WM$coefficients[1:12,c(1,2,4)],5)
+
+rest_dat <- rest_dat %>% select(ID1,ID2,FluidIntl,Age,DSM4_Alc_Abuse,DSM4_Alc_Dep,BMI,Education,Ethnicity,Gender,Handedness,Income,Race,SmokeStatus,KS,JACCARD,Mink_14,EUC)
+rest_dat <- rest_dat %>% subset(ID1 %in% lvls) %>% subset(ID2 %in% lvls)
+rest_dat[,lvls] <- model.matrix(~factor(rest_dat[,"ID1"],levels=lvls)-1) + model.matrix(~factor(rest_dat[,"ID2"],levels=lvls)-1)
+rest_dat <- rest_dat %>% select(-ID1,-ID2)
+
+jaccard_results_rest <- summary(lm(JACCARD~.-1-EUC-KS-Mink_14,data=rest_dat))$coefficients
+ks_results_rest <- summary(lm(KS~.-1-EUC-JACCARD-Mink_14,data=rest_dat))$coefficients
+euclidean_results_rest <- summary(lm(EUC~.-1-JACCARD-KS-Mink_14,data=rest_dat))$coefficients
+mink14_results_rest <- summary(lm(Mink_14~.-1-EUC-KS-JACCARD,data=rest_dat))$coefficients
+
+write.csv(cbind(ks_results_rest,jaccard_results_rest,mink14_results_rest,euclidean_results_rest),file="hcp_results_rest_degree.csv")
+# write.csv(rest_top20[row.names(HCP_dem_unrestricted[as.character(rest_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR <= quantile(PMAT24_A_CR,0.25))),],file="HCP_rest_degree_Jaccard_top20_FluidIntl_bot25.csv")
+# write.csv(rest_top20[row.names(HCP_dem_unrestricted[as.character(rest_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR >= quantile(PMAT24_A_CR,0.75))),],file="HCP_rest_degree_Jaccard_top20_FluidIntl_top25.csv")
+
+# round(jaccard_results_rest$coefficients[1:12,c(1,2,4)],5)
+# round(ks_results_rest$coefficients[1:12,c(1,2,4)],5)
+# round(euclidean_results_rest$coefficients[1:12,c(1,2,4)],5)
+# round(mink14_results_rest$coefficients[1:12,c(1,2,4)],5)
+```
+
+Summary Statistics for table (main text)
+```{r}
+print("fluidintl")
+round(mean(HCP_dem_unrestricted[lvls,"PMAT24_A_CR"]),1)
+round(sd(HCP_dem_unrestricted[lvls,"PMAT24_A_CR"]),1)
+print("age")
+round(mean(HCP_dem[lvls,"Age_in_Yrs"]),1)
+round(sd(HCP_dem[lvls,"Age_in_Yrs"]),1)
+print("BMI")
+round(mean(HCP_dem[lvls,"BMI"]),1)
+round(sd(HCP_dem[lvls,"BMI"]),1)
+print("Education")
+round(mean(HCP_dem[lvls,"SSAGA_Educ"]),1)
+round(sd(HCP_dem[lvls,"SSAGA_Educ"]),1)
+print("Handedness")
+round(mean(HCP_dem[lvls,"Handedness"]),1)
+round(sd(HCP_dem[lvls,"Handedness"]),1)
+print("Income")
+round(mean(HCP_dem[lvls,"SSAGA_Income"]),1)
+round(sd(HCP_dem[lvls,"SSAGA_Income"]),1)
+
+table(HCP_dem[lvls,"SSAGA_Income"])
+table(HCP_dem[lvls,"Handedness"])
+table(HCP_dem[lvls,"SSAGA_Educ"])
+table(HCP_dem_unrestricted[lvls,"Gender"])
+
+table(HCP_dem[lvls,"Race"])
+table(HCP_dem[lvls,"Ethnicity"])
+table(HCP_dem[lvls,"SSAGA_Income"])
+table(HCP_dem[lvls,"SSAGA_Alc_D4_Ab_Dx"])
+table(HCP_dem[lvls,"SSAGA_Alc_D4_Dp_Dx"])
+table(HCP_dem[lvls,"SSAGA_TB_Still_Smoking"])
+```
+
+Look at heatmaps of individual connectivity matrices
+```{r}
+library(gplots)
+heatmap.2(rest_list[[2]], Rowv = F, Colv = F, dendrogram = 'none',trace = 'none', breaks=seq(-1,1,0.02), col=redblue(100))
+heatmap.2(WM_list[[2]], Rowv = F, Colv = F, dendrogram = 'none',trace = 'none', breaks=seq(-1,1,0.02), col=redblue(100))
+heatmap.2(pmax(rest_list[[2]],0), Rowv = F, Colv = F, dendrogram = 'none',trace = 'none', breaks=seq(0,1,0.01), col=colorRampPalette(c("blue","yellow","red"))(100))
+heatmap.2(pmax(WM_list[[2]],0), Rowv = F, Colv = F, dendrogram = 'none',trace = 'none', breaks=seq(0,1,0.01), col=colorRampPalette(c("blue","yellow","red"))(100))
+heatmap.2(abs(rest_list[[2]]), Rowv = F, Colv = F, dendrogram = 'none',trace = 'none', breaks=seq(0,1,0.01), col=colorRampPalette(c("blue","yellow","red"))(100))
+heatmap.2(abs(WM_list[[2]]), Rowv = F, Colv = F, dendrogram = 'none',trace = 'none', breaks=seq(0,1,0.01), col=colorRampPalette(c("blue","yellow","red"))(100))
+```
+
+Build HCP Dataset for modularity (scaled inclusivity) anlysis (main text)
+```{r}
+##### ----- Data Read-in ----- #####
+
+# Read-in Demographic Data
+HCP_dem <- as.data.frame(read_excel("Demographics_Restricted.xlsx"))
+rownames(HCP_dem) <- HCP_dem$Subject
+HCP_dem_unrestricted <- as.data.frame(read_csv("Demographics_Unrestricted.csv"))
+rownames(HCP_dem_unrestricted) <- HCP_dem_unrestricted$Subject
+
+# Add variable to HCP_dem dataset letting us know which subjects got QC'ed bad
+HCP_dem$QC_Bad <- HCP_dem$Subject %in% read.csv("QC_badSubjects.csv")[,1]
+
+# Build both a matrix and list with all subjects WM_CI connection files
+#   CI: each row contains the CI of each node for that subject
+#   top20: each row is binary, 1 if node is in top 20, 0 if not
+WM_CI <- as.matrix(read.csv("WM_SI_CEN.csv",header=F))
+rownames(WM_CI) <- WM_CI[,1]
+WM_CI <- WM_CI[,-c(1,270)]
+colnames(WM_CI) <- paste0("node_",1:268)
+
+WM_CI_top20 <- WM_CI
+for(id in row.names(WM_CI)) {
+  WM_CI_top20[id,] <- WM_CI[id,] > quantile(WM_CI[id,],1-.2)
+}
+
+# Build both a matrix with all subjects rest_CI  files
+#   CI: each row contains the CI of each node for that subject
+#   top20: each row is binary, 1 if node is in top 20, 0 if not
+rest_CI <- as.matrix(read.csv("rest_SI_DMN.csv",header=F))
+rownames(rest_CI) <- rest_CI[,1]
+rest_CI <- rest_CI[,-c(1,270)]
+colnames(rest_CI) <- paste0("node_",1:268)
+
+rest_CI_top20 <- rest_CI
+for(id in row.names(rest_CI)) {
+  rest_CI_top20[id,] <- rest_CI[id,] > quantile(rest_CI[id,],1-.2)
+}
+
+# Add variables to HCP_dem letting us know which types of connection matrices are available for each subject
+HCP_dem$rest_CI_check <- HCP_dem$Subject %in% rownames(rest_CI)
+HCP_dem$WM_CI_check <- HCP_dem$Subject %in% rownames(WM_CI)
+
+
+# Build Distance Matrices for WM_CI
+WM_CI_dmat_jaccard <- matrix(0,nrow=sum(HCP_dem$WM_CI_check),ncol=sum(HCP_dem$WM_CI_check),dimnames=list(HCP_dem$Subject[HCP_dem$WM_CI_check],HCP_dem$Subject[HCP_dem$WM_CI_check]))
+WM_CI_dmat_ks <- WM_CI_dmat_euc <- WM_CI_dmat_mink14 <- WM_CI_dmat_jaccard 
+# Same thing for Covariates
+WM_CI_FluidIntl = WM_CI_Gender = WM_CI_Age = WM_CI_Education = WM_CI_BMI = WM_CI_Race = WM_CI_Ethnicity = WM_CI_Handedness = WM_CI_Income = WM_CI_DSM4_Alc_Abuse = WM_CI_DSM4_Alc_Dep = WM_CI_SmokeStatus = WM_CI_ID1 = WM_CI_ID2 = WM_CI_dmat_jaccard
+
+WM_CI_df <- matrix(NA,nrow=choose(sum(HCP_dem$WM_CI_check),2),ncol=18,dimnames = list(NULL,c("ID1","ID2","FluidIntl","Gender","Age","Education","BMI","Race","Ethnicity","Handedness","Income","DSM4_Alc_Abuse","DSM4_Alc_Dep","SmokeStatus","EUC","JACCARD","KS","Mink_14")))
+
+counter = 1
+
+for(i in colnames(WM_CI_dmat_ks)) {
+    for(j in colnames(WM_CI_dmat_ks)[-c(1:match(i,colnames(WM_CI_dmat_ks)))]) {
+      
+      WM_CI_df[counter,"ID1"] <- i
+      WM_CI_df[counter,"ID2"] <- j
+
+      WM_CI_FluidIntl[i,j] = WM_CI_FluidIntl[j,i] = WM_CI_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+      WM_CI_Gender[i,j] = WM_CI_Gender[j,i] = WM_CI_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+      WM_CI_Age[i,j] = WM_CI_Age[j,i] = WM_CI_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+      WM_CI_Education[i,j] = WM_CI_Education[j,i] = WM_CI_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+      WM_CI_BMI[i,j] = WM_CI_BMI[j,i] = WM_CI_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+      WM_CI_Race[i,j] = WM_CI_Race[j,i] = WM_CI_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+      WM_CI_Ethnicity[i,j] = WM_CI_Ethnicity[j,i] = WM_CI_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+      WM_CI_Handedness[i,j] = WM_CI_Handedness[j,i] = WM_CI_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+      WM_CI_Income[i,j] = WM_CI_Income[j,i] = WM_CI_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+      WM_CI_DSM4_Alc_Abuse[i,j] = WM_CI_DSM4_Alc_Abuse[j,i] = WM_CI_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+      WM_CI_DSM4_Alc_Dep[i,j] = WM_CI_DSM4_Alc_Dep[j,i] = WM_CI_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+      WM_CI_SmokeStatus[i,j] = WM_CI_SmokeStatus[j,i] = WM_CI_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+      
+      WM_CI_dmat_jaccard[i,j] = WM_CI_dmat_jaccard[j,i] = WM_CI_df[counter,"JACCARD"] = sum(WM_CI_top20[i,]==WM_CI_top20[j,])/268
+      WM_CI_dmat_ks[i,j] = WM_CI_dmat_ks[j,i] = WM_CI_df[counter,"KS"] = suppressWarnings(ks.test(WM_CI[i,],WM_CI[j,]))$statistic
+      WM_CI_dmat_euc[i,j] = WM_CI_dmat_euc[j,i] = WM_CI_df[counter,"EUC"] = dist(rbind(WM_CI[i,],WM_CI[j,]),method = "euclidean")
+      WM_CI_dmat_mink14[i,j] = WM_CI_dmat_mink14[j,i] = WM_CI_df[counter,"Mink_14"] = dist(rbind(WM_CI[i,],WM_CI[j,]),method = "minkowski",p=1.4)
+      
+      counter = counter + 1
+    }
+}
+
+# Build Distance Matrices for rest_CI
+rest_CI_dmat_jaccard <- matrix(0,nrow=sum(HCP_dem$rest_CI_check),ncol=sum(HCP_dem$rest_CI_check),dimnames=list(HCP_dem$Subject[HCP_dem$rest_CI_check],HCP_dem$Subject[HCP_dem$rest_CI_check]))
+rest_CI_dmat_ks <- rest_CI_dmat_euc <- rest_CI_dmat_mink14 <- rest_CI_dmat_jaccard
+# Same thing for Covariates
+rest_CI_FluidIntl = rest_CI_Gender = rest_CI_Age = rest_CI_Education = rest_CI_BMI = rest_CI_Race = rest_CI_Ethnicity = rest_CI_Handedness = rest_CI_Income = rest_CI_DSM4_Alc_Abuse = rest_CI_DSM4_Alc_Dep = rest_CI_SmokeStatus = rest_CI_ID1 = rest_CI_ID2 = rest_CI_dmat_jaccard
+
+rest_CI_df <- matrix(NA,nrow=choose(sum(HCP_dem$rest_CI_check),2),ncol=18,dimnames = list(NULL,c("ID1","ID2","FluidIntl","Gender","Age","Education","BMI","Race","Ethnicity","Handedness","Income","DSM4_Alc_Abuse","DSM4_Alc_Dep","SmokeStatus","EUC","JACCARD","KS","Mink_14")))
+
+counter = 1
+
+for(i in colnames(rest_CI_dmat_ks)) {
+    for(j in colnames(rest_CI_dmat_ks)[-c(1:match(i,colnames(rest_CI_dmat_ks)))]) {
+      
+      rest_CI_df[counter,"ID1"] <- i
+      rest_CI_df[counter,"ID2"] <- j
+
+      rest_CI_FluidIntl[i,j] = rest_CI_FluidIntl[j,i] = rest_CI_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+      rest_CI_Gender[i,j] = rest_CI_Gender[j,i] = rest_CI_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+      rest_CI_Age[i,j] = rest_CI_Age[j,i] = rest_CI_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+      rest_CI_Education[i,j] = rest_CI_Education[j,i] = rest_CI_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+      rest_CI_BMI[i,j] = rest_CI_BMI[j,i] = rest_CI_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+      rest_CI_Race[i,j] = rest_CI_Race[j,i] = rest_CI_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+      rest_CI_Ethnicity[i,j] = rest_CI_Ethnicity[j,i] = rest_CI_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+      rest_CI_Handedness[i,j] = rest_CI_Handedness[j,i] = rest_CI_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+      rest_CI_Income[i,j] = rest_CI_Income[j,i] = rest_CI_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+      rest_CI_DSM4_Alc_Abuse[i,j] = rest_CI_DSM4_Alc_Abuse[j,i] = rest_CI_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+      rest_CI_DSM4_Alc_Dep[i,j] = rest_CI_DSM4_Alc_Dep[j,i] = rest_CI_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+      rest_CI_SmokeStatus[i,j] = rest_CI_SmokeStatus[j,i] = rest_CI_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+      
+      rest_CI_dmat_jaccard[i,j] = rest_CI_dmat_jaccard[j,i] = rest_CI_df[counter,"JACCARD"] = sum(rest_CI_top20[i,]==rest_CI_top20[j,])/268
+      rest_CI_dmat_ks[i,j] = rest_CI_dmat_ks[j,i] = rest_CI_df[counter,"KS"] = suppressWarnings(ks.test(rest_CI[i,],rest_CI[j,]))$statistic
+      rest_CI_dmat_euc[i,j] = rest_CI_dmat_euc[j,i] = rest_CI_df[counter,"EUC"] = dist(rbind(rest_CI[i,],rest_CI[j,]),method = "euclidean")
+      rest_CI_dmat_mink14[i,j] = rest_CI_dmat_mink14[j,i] = rest_CI_df[counter,"Mink_14"] = dist(rbind(rest_CI[i,],rest_CI[j,]),method = "minkowski",p=1.4)
+      
+      counter = counter + 1
+    }
+}
+
+save.image("C:/Users/chalm/Dropbox/Dissertation/HCP Data/HCP_builtdata_CI.RData")
+##### ------------------------ #####
+```
+
+Load Built modularity (scaled inclusivity) Dataset and do Analysis
+```{r}
+load("C:/Users/chalm/Dropbox/Dissertation/HCP Data/HCP_builtdata_CI.RData")
+
+WM_CI_df <- remove_missing(as.data.frame(WM_CI_df))
+WM_CI_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(WM_CI_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)
+WM_CI_dat <- WM_CI_df %>% subset(ID1 %in% WM_CI_IDs) %>% subset(ID2 %in% WM_CI_IDs)
+WM_CI_dat[,3:18] <- apply(WM_CI_dat[,3:18], 2, as.numeric)
+WM_CI_lvls <- unique(c(WM_CI_dat[,"ID1"],WM_CI_dat[,"ID2"]))
+
+rest_CI_df <- remove_missing(as.data.frame(rest_CI_df))
+rest_CI_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(rest_CI_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)
+rest_CI_dat <- rest_CI_df %>% subset(ID1 %in% rest_CI_IDs) %>% subset(ID2 %in% rest_CI_IDs)
+rest_CI_dat[,3:18] <- apply(rest_CI_dat[,3:18], 2, as.numeric)
+rest_CI_lvls <- unique(c(rest_CI_dat[,"ID1"],rest_CI_dat[,"ID2"]))
+
+lvls <- intersect(WM_CI_lvls,rest_CI_lvls)
+
+WM_CI_dat <- WM_CI_dat %>% select(ID1,ID2,FluidIntl,Age,DSM4_Alc_Abuse,DSM4_Alc_Dep,BMI,Education,Ethnicity,Gender,Handedness,Income,Race,SmokeStatus,KS,JACCARD,Mink_14,EUC)
+WM_CI_dat <- WM_CI_dat %>% subset(ID1 %in% lvls) %>% subset(ID2 %in% lvls)
+WM_CI_dat[,lvls] <- model.matrix(~factor(WM_CI_dat[,"ID1"],levels=lvls)-1) + model.matrix(~factor(WM_CI_dat[,"ID2"],levels=lvls)-1)
+WM_CI_dat <- WM_CI_dat %>% select(-ID1,-ID2)
+
+ks_results_WM_CI <- summary(lm(KS~.-1-EUC-JACCARD-Mink_14,data=WM_CI_dat))$coefficients
+jaccard_results_WM_CI <- summary(lm(JACCARD~.-1-EUC-KS-Mink_14,data=WM_CI_dat))$coefficients
+mink14_results_WM_CI <- summary(lm(Mink_14~.-1-EUC-KS-JACCARD,data=WM_CI_dat))$coefficients
+euclidean_results_WM_CI <- summary(lm(EUC~.-1-JACCARD-KS-Mink_14,data=WM_CI_dat))$coefficients
+
+write.csv(cbind(ks_results_WM_CI,jaccard_results_WM_CI,mink14_results_WM_CI,euclidean_results_WM_CI),file="hcp_results_WM_CI.csv")
+# write.csv(WM_CI_top20[row.names(HCP_dem_unrestricted[as.character(WM_CI_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR <= quantile(PMAT24_A_CR,0.25))),],file="HCP_WM_CI_Jaccard_top20_FluidIntl_bot25.csv")
+# write.csv(WM_CI_top20[row.names(HCP_dem_unrestricted[as.character(WM_CI_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR >= quantile(PMAT24_A_CR,0.75))),],file="HCP_WM_CI_Jaccard_top20_FluidIntl_top25.csv")
+
+# round(jaccard_results_WM_CI$coefficients[1:12,c(1,2,4)],5)
+# round(ks_results_WM_CI$coefficients[1:12,c(1,2,4)],5)
+# round(euclidean_results_WM_CI$coefficients[1:12,c(1,2,4)],5)
+# round(mink14_results_WM_CI$coefficients[1:12,c(1,2,4)],5)
+
+rest_CI_dat <- rest_CI_dat %>% select(ID1,ID2,FluidIntl,Age,DSM4_Alc_Abuse,DSM4_Alc_Dep,BMI,Education,Ethnicity,Gender,Handedness,Income,Race,SmokeStatus,KS,JACCARD,Mink_14,EUC)
+rest_CI_dat <- rest_CI_dat %>% subset(ID1 %in% lvls) %>% subset(ID2 %in% lvls)
+rest_CI_dat[,lvls] <- model.matrix(~factor(rest_CI_dat[,"ID1"],levels=lvls)-1) + model.matrix(~factor(rest_CI_dat[,"ID2"],levels=lvls)-1)
+rest_CI_dat <- rest_CI_dat %>% select(-ID1,-ID2)
+
+jaccard_results_rest_CI <- summary(lm(JACCARD~.-1-EUC-KS-Mink_14,data=rest_CI_dat))$coefficients
+ks_results_rest_CI <- summary(lm(KS~.-1-EUC-JACCARD-Mink_14,data=rest_CI_dat))$coefficients
+euclidean_results_rest_CI <- summary(lm(EUC~.-1-JACCARD-KS-Mink_14,data=rest_CI_dat))$coefficients
+mink14_results_rest_CI <- summary(lm(Mink_14~.-1-EUC-KS-JACCARD,data=rest_CI_dat))$coefficients
+
+write.csv(cbind(ks_results_rest_CI,jaccard_results_rest_CI,mink14_results_rest_CI,euclidean_results_rest_CI),file="hcp_results_rest_CI.csv")
+# write.csv(rest_CI_top20[row.names(HCP_dem_unrestricted[as.character(rest_CI_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR <= quantile(PMAT24_A_CR,0.25))),],file="HCP_rest_CI_Jaccard_top20_FluidIntl_bot25.csv")
+# write.csv(rest_CI_top20[row.names(HCP_dem_unrestricted[as.character(rest_CI_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR >= quantile(PMAT24_A_CR,0.75))),],file="HCP_rest_CI_Jaccard_top20_FluidIntl_top25.csv")
+
+# round(jaccard_results_rest_CI$coefficients[1:12,c(1,2,4)],5)
+# round(ks_results_rest_CI$coefficients[1:12,c(1,2,4)],5)
+# round(euclidean_results_rest_CI$coefficients[1:12,c(1,2,4)],5)
+# round(mink14_results_rest_CI$coefficients[1:12,c(1,2,4)],5)
+```
+
+Build HCP Dataset for modularity difference (scaled inclusivity WM - rest) anlysis (main text)
+```{r}
+##### ----- Data Read-in ----- #####
+
+# Read-in Demographic Data
+HCP_dem <- as.data.frame(read_excel("Demographics_Restricted.xlsx"))
+rownames(HCP_dem) <- HCP_dem$Subject
+HCP_dem_unrestricted <- as.data.frame(read_csv("Demographics_Unrestricted.csv"))
+rownames(HCP_dem_unrestricted) <- HCP_dem_unrestricted$Subject
+
+# Add variable to HCP_dem dataset letting us know which subjects got QC'ed bad
+HCP_dem$QC_Bad <- HCP_dem$Subject %in% read.csv("QC_badSubjects.csv")[,1]
+
+# Build both a matrix and list with all subjects WM_CI connection files
+#   CI: each row contains the CI of each node for that subject
+#   top20: each row is binary, 1 if node is in top 20, 0 if not
+WM_SI_CEN <- as.matrix(read.csv("WM_SI_CEN.csv",header=F))
+rownames(WM_SI_CEN) <- WM_SI_CEN[,1]
+WM_SI_CEN <- WM_SI_CEN[,-c(1,270)]
+colnames(WM_SI_CEN) <- paste0("node_",1:268)
+rest_SI_CEN <- as.matrix(read.csv("rest_SI_CEN.csv",header=F))
+rownames(rest_SI_CEN) <- rest_SI_CEN[,1]
+rest_SI_CEN <- rest_SI_CEN[,-c(1,270)]
+colnames(rest_SI_CEN) <- paste0("node_",1:268)
+common_names <- intersect(rownames(WM_SI_CEN),rownames(rest_SI_CEN))
+WM_SI_CEN <- WM_SI_CEN[common_names,]
+rest_SI_CEN <- rest_SI_CEN[common_names,]
+CEN_diff <- WM_SI_CEN - rest_SI_CEN
+
+
+
+CEN_diff_top20 <- CEN_diff
+for(id in row.names(CEN_diff)) {
+  CEN_diff_top20[id,] <- CEN_diff[id,] > quantile(CEN_diff[id,],1-.2)
+}
+
+# Build both a matrix with all subjects DMN_diff  files
+#   CI: each row contains the CI of each node for that subject
+#   top20: each row is binary, 1 if node is in top 20, 0 if not
+WM_SI_DMN <- as.matrix(read.csv("WM_SI_DMN.csv",header=F))
+rownames(WM_SI_DMN) <- WM_SI_DMN[,1]
+WM_SI_DMN <- WM_SI_DMN[,-c(1,270)]
+colnames(WM_SI_DMN) <- paste0("node_",1:268)
+rest_SI_DMN <- as.matrix(read.csv("rest_SI_DMN.csv",header=F))
+rownames(rest_SI_DMN) <- rest_SI_DMN[,1]
+rest_SI_DMN <- rest_SI_DMN[,-c(1,270)]
+colnames(rest_SI_DMN) <- paste0("node_",1:268)
+common_names <- intersect(rownames(WM_SI_DMN),rownames(rest_SI_DMN))
+WM_SI_DMN <- WM_SI_DMN[common_names,]
+rest_SI_DMN <- rest_SI_DMN[common_names,]
+DMN_diff <- WM_SI_DMN - rest_SI_DMN
+
+DMN_diff_top20 <- DMN_diff
+for(id in row.names(DMN_diff)) {
+  DMN_diff_top20[id,] <- DMN_diff[id,] > quantile(DMN_diff[id,],1-.2)
+}
+
+# Add variables to HCP_dem letting us know which types of connection matrices are available for each subject
+HCP_dem$DMN_diff_check <- HCP_dem$Subject %in% rownames(DMN_diff)
+HCP_dem$CEN_diff_check <- HCP_dem$Subject %in% rownames(CEN_diff)
+
+
+# Build Distance Matrices for CEN_diff
+CEN_diff_dmat_jaccard <- matrix(0,nrow=sum(HCP_dem$CEN_diff_check),ncol=sum(HCP_dem$CEN_diff_check),dimnames=list(HCP_dem$Subject[HCP_dem$CEN_diff_check],HCP_dem$Subject[HCP_dem$CEN_diff_check]))
+CEN_diff_dmat_ks <- CEN_diff_dmat_euc <- CEN_diff_dmat_mink14 <- CEN_diff_dmat_jaccard 
+# Same thing for Covariates
+CEN_diff_FluidIntl = CEN_diff_Gender = CEN_diff_Age = CEN_diff_Education = CEN_diff_BMI = CEN_diff_Race = CEN_diff_Ethnicity = CEN_diff_Handedness = CEN_diff_Income = CEN_diff_DSM4_Alc_Abuse = CEN_diff_DSM4_Alc_Dep = CEN_diff_SmokeStatus = CEN_diff_ID1 = CEN_diff_ID2 = CEN_diff_dmat_jaccard
+
+CEN_diff_df <- matrix(NA,nrow=choose(sum(HCP_dem$CEN_diff_check),2),ncol=18,dimnames = list(NULL,c("ID1","ID2","FluidIntl","Gender","Age","Education","BMI","Race","Ethnicity","Handedness","Income","DSM4_Alc_Abuse","DSM4_Alc_Dep","SmokeStatus","EUC","JACCARD","KS","Mink_14")))
+
+counter = 1
+
+for(i in colnames(CEN_diff_dmat_ks)) {
+    for(j in colnames(CEN_diff_dmat_ks)[-c(1:match(i,colnames(CEN_diff_dmat_ks)))]) {
+      
+      CEN_diff_df[counter,"ID1"] <- i
+      CEN_diff_df[counter,"ID2"] <- j
+
+      CEN_diff_FluidIntl[i,j] = CEN_diff_FluidIntl[j,i] = CEN_diff_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+      CEN_diff_Gender[i,j] = CEN_diff_Gender[j,i] = CEN_diff_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+      CEN_diff_Age[i,j] = CEN_diff_Age[j,i] = CEN_diff_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+      CEN_diff_Education[i,j] = CEN_diff_Education[j,i] = CEN_diff_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+      CEN_diff_BMI[i,j] = CEN_diff_BMI[j,i] = CEN_diff_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+      CEN_diff_Race[i,j] = CEN_diff_Race[j,i] = CEN_diff_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+      CEN_diff_Ethnicity[i,j] = CEN_diff_Ethnicity[j,i] = CEN_diff_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+      CEN_diff_Handedness[i,j] = CEN_diff_Handedness[j,i] = CEN_diff_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+      CEN_diff_Income[i,j] = CEN_diff_Income[j,i] = CEN_diff_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+      CEN_diff_DSM4_Alc_Abuse[i,j] = CEN_diff_DSM4_Alc_Abuse[j,i] = CEN_diff_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+      CEN_diff_DSM4_Alc_Dep[i,j] = CEN_diff_DSM4_Alc_Dep[j,i] = CEN_diff_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+      CEN_diff_SmokeStatus[i,j] = CEN_diff_SmokeStatus[j,i] = CEN_diff_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+      
+      CEN_diff_dmat_jaccard[i,j] = CEN_diff_dmat_jaccard[j,i] = CEN_diff_df[counter,"JACCARD"] = sum(CEN_diff_top20[i,]==CEN_diff_top20[j,])/268
+      CEN_diff_dmat_ks[i,j] = CEN_diff_dmat_ks[j,i] = CEN_diff_df[counter,"KS"] = suppressWarnings(ks.test(CEN_diff[i,],CEN_diff[j,]))$statistic
+      CEN_diff_dmat_euc[i,j] = CEN_diff_dmat_euc[j,i] = CEN_diff_df[counter,"EUC"] = dist(rbind(CEN_diff[i,],CEN_diff[j,]),method = "euclidean")
+      CEN_diff_dmat_mink14[i,j] = CEN_diff_dmat_mink14[j,i] = CEN_diff_df[counter,"Mink_14"] = dist(rbind(CEN_diff[i,],CEN_diff[j,]),method = "minkowski",p=1.4)
+      
+      counter = counter + 1
+    }
+}
+
+# Build Distance Matrices for DMN_diff
+DMN_diff_dmat_jaccard <- matrix(0,nrow=sum(HCP_dem$DMN_diff_check),ncol=sum(HCP_dem$DMN_diff_check),dimnames=list(HCP_dem$Subject[HCP_dem$DMN_diff_check],HCP_dem$Subject[HCP_dem$DMN_diff_check]))
+DMN_diff_dmat_ks <- DMN_diff_dmat_euc <- DMN_diff_dmat_mink14 <- DMN_diff_dmat_jaccard
+# Same thing for Covariates
+DMN_diff_FluidIntl = DMN_diff_Gender = DMN_diff_Age = DMN_diff_Education = DMN_diff_BMI = DMN_diff_Race = DMN_diff_Ethnicity = DMN_diff_Handedness = DMN_diff_Income = DMN_diff_DSM4_Alc_Abuse = DMN_diff_DSM4_Alc_Dep = DMN_diff_SmokeStatus = DMN_diff_ID1 = DMN_diff_ID2 = DMN_diff_dmat_jaccard
+
+DMN_diff_df <- matrix(NA,nrow=choose(sum(HCP_dem$DMN_diff_check),2),ncol=18,dimnames = list(NULL,c("ID1","ID2","FluidIntl","Gender","Age","Education","BMI","Race","Ethnicity","Handedness","Income","DSM4_Alc_Abuse","DSM4_Alc_Dep","SmokeStatus","EUC","JACCARD","KS","Mink_14")))
+
+counter = 1
+
+for(i in colnames(DMN_diff_dmat_ks)) {
+    for(j in colnames(DMN_diff_dmat_ks)[-c(1:match(i,colnames(DMN_diff_dmat_ks)))]) {
+      
+      DMN_diff_df[counter,"ID1"] <- i
+      DMN_diff_df[counter,"ID2"] <- j
+
+      DMN_diff_FluidIntl[i,j] = DMN_diff_FluidIntl[j,i] = DMN_diff_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+      DMN_diff_Gender[i,j] = DMN_diff_Gender[j,i] = DMN_diff_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+      DMN_diff_Age[i,j] = DMN_diff_Age[j,i] = DMN_diff_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+      DMN_diff_Education[i,j] = DMN_diff_Education[j,i] = DMN_diff_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+      DMN_diff_BMI[i,j] = DMN_diff_BMI[j,i] = DMN_diff_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+      DMN_diff_Race[i,j] = DMN_diff_Race[j,i] = DMN_diff_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+      DMN_diff_Ethnicity[i,j] = DMN_diff_Ethnicity[j,i] = DMN_diff_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+      DMN_diff_Handedness[i,j] = DMN_diff_Handedness[j,i] = DMN_diff_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+      DMN_diff_Income[i,j] = DMN_diff_Income[j,i] = DMN_diff_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+      DMN_diff_DSM4_Alc_Abuse[i,j] = DMN_diff_DSM4_Alc_Abuse[j,i] = DMN_diff_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+      DMN_diff_DSM4_Alc_Dep[i,j] = DMN_diff_DSM4_Alc_Dep[j,i] = DMN_diff_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+      DMN_diff_SmokeStatus[i,j] = DMN_diff_SmokeStatus[j,i] = DMN_diff_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+      
+      DMN_diff_dmat_jaccard[i,j] = DMN_diff_dmat_jaccard[j,i] = DMN_diff_df[counter,"JACCARD"] = sum(DMN_diff_top20[i,]==DMN_diff_top20[j,])/268
+      DMN_diff_dmat_ks[i,j] = DMN_diff_dmat_ks[j,i] = DMN_diff_df[counter,"KS"] = suppressWarnings(ks.test(DMN_diff[i,],DMN_diff[j,]))$statistic
+      DMN_diff_dmat_euc[i,j] = DMN_diff_dmat_euc[j,i] = DMN_diff_df[counter,"EUC"] = dist(rbind(DMN_diff[i,],DMN_diff[j,]),method = "euclidean")
+      DMN_diff_dmat_mink14[i,j] = DMN_diff_dmat_mink14[j,i] = DMN_diff_df[counter,"Mink_14"] = dist(rbind(DMN_diff[i,],DMN_diff[j,]),method = "minkowski",p=1.4)
+      
+      counter = counter + 1
+    }
+}
+
+save.image("C:/Users/chalm/Dropbox/Dissertation/HCP Data/HCP_builtdata_SI_diff.RData")
+##### ------------------------ #####
+```
+
+Load Built modularity difference (scaled inclusivity WM - rest) Dataset and do Analysis
+```{r}
+load("C:/Users/chalm/Dropbox/Dissertation/HCP Data/HCP_builtdata_SI_diff.RData")
+
+CEN_diff_df <- remove_missing(as.data.frame(CEN_diff_df))
+CEN_diff_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(CEN_diff_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)
+CEN_diff_dat <- CEN_diff_df %>% subset(ID1 %in% CEN_diff_IDs) %>% subset(ID2 %in% CEN_diff_IDs)
+CEN_diff_dat[,3:18] <- apply(CEN_diff_dat[,3:18], 2, as.numeric)
+CEN_diff_dat[,1:2] <- apply(CEN_diff_dat[,1:2], 2, as.character)
+CEN_diff_lvls <- unique(c(CEN_diff_dat[,"ID1"],CEN_diff_dat[,"ID2"]))
+
+DMN_diff_df <- remove_missing(as.data.frame(DMN_diff_df))
+DMN_diff_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(DMN_diff_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)
+DMN_diff_dat <- DMN_diff_df %>% subset(ID1 %in% DMN_diff_IDs) %>% subset(ID2 %in% DMN_diff_IDs)
+DMN_diff_dat[,3:18] <- apply(DMN_diff_dat[,3:18], 2, as.numeric)
+DMN_diff_dat[,1:2] <- apply(DMN_diff_dat[,1:2], 2, as.character)
+DMN_diff_lvls <- unique(c(DMN_diff_dat[,"ID1"],DMN_diff_dat[,"ID2"]))
+
+lvls <- intersect(CEN_diff_lvls,DMN_diff_lvls)
+
+CEN_diff_dat <- CEN_diff_dat %>% select(ID1,ID2,FluidIntl,Age,DSM4_Alc_Abuse,DSM4_Alc_Dep,BMI,Education,Ethnicity,Gender,Handedness,Income,Race,SmokeStatus,KS,JACCARD,Mink_14,EUC)
+CEN_diff_dat <- CEN_diff_dat %>% subset(ID1 %in% lvls) %>% subset(ID2 %in% lvls)
+CEN_diff_dat[,lvls] <- model.matrix(~factor(CEN_diff_dat[,"ID1"],levels=lvls)-1) + model.matrix(~factor(CEN_diff_dat[,"ID2"],levels=lvls)-1)
+CEN_diff_dat <- CEN_diff_dat %>% select(-ID1,-ID2)
+
+ks_results_CEN_diff <- summary(lm(KS~.-1-EUC-JACCARD-Mink_14,data=CEN_diff_dat))$coefficients
+jaccard_results_CEN_diff <- summary(lm(JACCARD~.-1-EUC-KS-Mink_14,data=CEN_diff_dat))$coefficients
+mink14_results_CEN_diff <- summary(lm(Mink_14~.-1-EUC-KS-JACCARD,data=CEN_diff_dat))$coefficients
+euclidean_results_CEN_diff <- summary(lm(EUC~.-1-JACCARD-KS-Mink_14,data=CEN_diff_dat))$coefficients
+
+write.csv(cbind(ks_results_CEN_diff,jaccard_results_CEN_diff,mink14_results_CEN_diff,euclidean_results_CEN_diff),file="hcp_results_CEN_diff.csv")
+write.csv(CEN_diff_top20[row.names(HCP_dem_unrestricted[as.character(CEN_diff_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR <= quantile(PMAT24_A_CR,0.25))),],file="HCP_CEN_diff_Jaccard_top20_FluidIntl_bot25.csv")
+write.csv(CEN_diff_top20[row.names(HCP_dem_unrestricted[as.character(CEN_diff_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR >= quantile(PMAT24_A_CR,0.75))),],file="HCP_CEN_diff_Jaccard_top20_FluidIntl_top25.csv")
+
+# round(jaccard_results_CEN_diff$coefficients[1:12,c(1,2,4)],5)
+# round(ks_results_CEN_diff$coefficients[1:12,c(1,2,4)],5)
+# round(euclidean_results_CEN_diff$coefficients[1:12,c(1,2,4)],5)
+# round(mink14_results_CEN_diff$coefficients[1:12,c(1,2,4)],5)
+
+DMN_diff_dat <- DMN_diff_dat %>% select(ID1,ID2,FluidIntl,Age,DSM4_Alc_Abuse,DSM4_Alc_Dep,BMI,Education,Ethnicity,Gender,Handedness,Income,Race,SmokeStatus,KS,JACCARD,Mink_14,EUC)
+DMN_diff_dat <- DMN_diff_dat %>% subset(ID1 %in% lvls) %>% subset(ID2 %in% lvls)
+DMN_diff_dat[,lvls] <- model.matrix(~factor(DMN_diff_dat[,"ID1"],levels=lvls)-1) + model.matrix(~factor(DMN_diff_dat[,"ID2"],levels=lvls)-1)
+DMN_diff_dat <- DMN_diff_dat %>% select(-ID1,-ID2)
+
+jaccard_results_DMN_diff <- summary(lm(JACCARD~.-1-EUC-KS-Mink_14,data=DMN_diff_dat))$coefficients
+ks_results_DMN_diff <- summary(lm(KS~.-1-EUC-JACCARD-Mink_14,data=DMN_diff_dat))$coefficients
+euclidean_results_DMN_diff <- summary(lm(EUC~.-1-JACCARD-KS-Mink_14,data=DMN_diff_dat))$coefficients
+mink14_results_DMN_diff <- summary(lm(Mink_14~.-1-EUC-KS-JACCARD,data=DMN_diff_dat))$coefficients
+
+write.csv(cbind(ks_results_DMN_diff,jaccard_results_DMN_diff,mink14_results_DMN_diff,euclidean_results_DMN_diff),file="hcp_results_DMN_diff.csv")
+write.csv(DMN_diff_top20[row.names(HCP_dem_unrestricted[as.character(DMN_diff_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR <= quantile(PMAT24_A_CR,0.25))),],file="HCP_DMN_diff_Jaccard_top20_FluidIntl_bot25.csv")
+write.csv(DMN_diff_top20[row.names(HCP_dem_unrestricted[as.character(DMN_diff_IDs),c("Subject","PMAT24_A_CR")] %>% subset(Subject %in% lvls) %>% subset(PMAT24_A_CR >= quantile(PMAT24_A_CR,0.75))),],file="HCP_DMN_diff_Jaccard_top20_FluidIntl_top25.csv")
+
+# round(jaccard_results_DMN_diff$coefficients[1:12,c(1,2,4)],5)
+# round(ks_results_DMN_diff$coefficients[1:12,c(1,2,4)],5)
+# round(euclidean_results_DMN_diff$coefficients[1:12,c(1,2,4)],5)
+# round(mink14_results_DMN_diff$coefficients[1:12,c(1,2,4)],5)
+```
+
+
+
+
