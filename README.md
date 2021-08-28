@@ -7,8 +7,8 @@ Run permute_aim2_lm.R (F-test with ILE) and permute_2.R (other methods) for simu
 # simulation 4
 Run simulate_aim2_ks.R for task_ID 1:10000 <br>
 Run permute_aim2_lm_ks.R (F-test with ILE) and permute_2_ks.R (other methods) for all simulations. <br>
-<br>
 
+# MDMR
 Run permute2_mdmr.R (MDMR) for all simulations 1-4.
 
 
