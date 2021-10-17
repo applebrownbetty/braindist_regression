@@ -3,88 +3,44 @@ library(tidyverse)
 task_ID <- as.numeric(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 #task_ID <- 0
 
-################################################
-##### ----- Step 1: simulate dataset ----- #####
-################################################
-
 symmat_diag0 <- function(X) {
   X[lower.tri(X)]  <- t(X)[lower.tri(X)]
   diag(X) <- 0
   return(X)
 }
 
-# jaccard_wt <- function(x,y) {
-#   # calculates weighted Jaccard similarity between
-#   # x and y (positive vectors of equal length)
-#   if(length(x)!=length(y)) {
-#     warning("vectors must be of the same length")
-#   } else if(any(c(x,y) < 0)) {
-#     warning("all elements must be nonnegative")
-#   } else {
-#     return(sum(pmin(x,y)^2)/sum(pmax(x,y)^2))
-#   }
-# }
-
-# For these coefficients we follow the notation of
-#  Sneath and Sokal (1973): let "U" equal the number of
-#  disagreements (either "s 1 99-" 0 " or "0"- 1 "), "a" equal
-#  the number of shared presences, "d" equal the number
-#  of shared absences. "N" is the number of characters. For
-#  a particular pair of individuals a character can then be
-#  referred to as an "a-type" character, for example, if both
-#  individuals have the I state.
-
 binary_coefs <- function(x,y) {
-  # calculates weighted Jaccard similarity between
-  # x and y (positive vectors of equal length)
   if(length(x)!=length(y)) {
     warning("vectors must be of the same length")
   } else if(any(!(c(x,y) %in%  c(0,1)))) {
     warning("all elements must be 0 or 1")
   } else {
-    U <- sum(x!=y)
     M_11 <- sum(x==1 & y==1)
     M_01 <- sum(x==0 & y==1)
     M_10 <- sum(x==1 & y==0)
-    Jaccard <- (M_01+M_10)/(M_01+M_10+M_11)
-    vec <- c(Jaccard)
-    names(vec) <- c("Jaccard")    
-    # U <- sum(x!=y)
-    # a <- sum(x==1 & y==1)
-    # d <- sum(x==0 & y==0)
-    # N <- length(x)
-    # Jaccard <- (a+d)/N
-    # vec <- c(Jaccard)
-    # names(vec) <- c("Jaccard")
-    # Russel_Rao <- a/N
-    # idkJaccard <- a/(a+U)
-    # Kulzinski <- 2*a/(2*a+U+2*d)
-    # BaroniUrbani_Bauer <- (a + sqrt(a*d))/(a + U + sqrt(a*d))
-    # vec <- c(Jaccard,Russel_Rao,idkJaccard,Kulzinski,BaroniUrbani_Bauer)
-    # names(vec) <- c("Jaccard","Russel_Rao","idkJaccard","Kulzinski","BaroniUrbani_Bauer")
+    M_00 <- sum(x==0 & y==0)
+    JI <- (M_11)/(M_01+M_10+M_11)
+    JD <- 1-JI
+    SMC <- (M_00+M_11)/(M_00+M_01+M_10+M_11)
+    SMD <- 1-SMC
+    vec <- c(JI,JD,SMC,SMD)
+    names(vec) <- c("JI","JD","SMC","SMD")    
     return(t(vec))
   }
 }
 
 cont_coefs <- function(x,y) {
-  # calculates weighted Jaccard similarity between
-  # x and y (positive vectors of equal length)
   if(length(x)!=length(y)) {
     warning("vectors must be of the same length")
   } else if(any((c(x,y) < 0))) {
     warning("all elements should be >= 0")
   } else {
-    #    jaccard_wt <- jaccard_wt(x,y)
     ks <- ks.test(x,y)$statistic
-    #    maxim <- dist(rbind(x,y),method = "maximum")
-    #    manhat <- dist(rbind(x,y),method = "manhattan")
     minkow0.5 <- dist(rbind(x,y),method = "minkowski",p=0.5)
     canber <- dist(rbind(x,y),method = "canberra")
     minkow1.4 <- dist(rbind(x,y),method = "minkowski",p=1.4)
     euc <- dist(rbind(x,y),method = "euclidean")
     minkow3 <- dist(rbind(x,y),method = "minkowski",p=3)
-    #    vec <- c(jaccard_wt,ks,euc,maxim,manhat,canber,minkow0.5,minkow1.4,minkow3)
-    #    names(vec) <- c("Jaccard_wt","KS","Euclidean","Maximum","Manhattan","Canberra","Minkowski_0.5", "Minkowski_1.4", "Minkowski_3")
     vec <- c(ks,euc,canber,minkow0.5,minkow1.4,minkow3)
     names(vec) <- c("KS","Euclidean","Canberra","Minkowski_0.5", "Minkowski_1.4", "Minkowski_3")
     return(t(vec))
@@ -203,8 +159,4 @@ aim2simdat <- function(seed) {
   saveRDS(df,output_file_path)
 }
 
-for(i in 1:10) {
-simid <- task_ID*10+i
-aim2simdat(simid)
-}
-
+aim2simdat(task_ID)

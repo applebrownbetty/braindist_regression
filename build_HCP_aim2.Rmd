@@ -21,7 +21,6 @@ jaccard_d <- function(x,y) {
   } else if(any(!(c(x,y) %in%  c(0,1)))) {
     warning("all elements must be 0 or 1")
   } else {
-    U <- sum(x!=y)
     M_11 <- sum(x==1 & y==1)
     M_01 <- sum(x==0 & y==1)
     M_10 <- sum(x==1 & y==0)
@@ -384,13 +383,13 @@ for(i in colnames(rest_CI_dmat_ks)) {
     }
 }
 
-save.image("C:/Users/chalm/Dropbox/Dissertation/HCP Data/HCP_builtdata_CI.RData")
+save.image("HCP_builtdata_CI.RData")
 ##### ------------------------ #####
 ```
 
 Load Built modularity (scaled inclusivity) Dataset and do Analysis
 ```{r}
-load("C:/Users/chalm/Dropbox/Dissertation/HCP Data/HCP_builtdata_CI.RData")
+load("HCP_builtdata_CI.RData")
 
 WM_CI_df <- remove_missing(as.data.frame(WM_CI_df))
 WM_CI_IDs <- HCP_dem %>% subset(!QC_Bad) %>% subset(WM_CI_check) %>% group_by(Family_ID) %>% slice(1) %>% pull(Subject)

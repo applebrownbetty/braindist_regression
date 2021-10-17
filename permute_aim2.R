@@ -24,7 +24,7 @@ dat <- tibble(
   Age = round(rnorm(np,mean=100,sd=15))
 )
 
-output_file_name <- paste0("perm_JAC_",sprintf("%06d",task_ID),".Rds")
+output_file_name <- paste0("perm_JI_",sprintf("%06d",task_ID),".Rds")
 output_file_path <- file.path("/pine/scr/c/h/chalmer/aim2/simulations/results/",output_file_name)
 
 GLiSh <- function(form,DM,ID1,ID2,df) {
@@ -97,7 +97,7 @@ VDM <- function(a) {
 
 sims <- 1:4
 signals <- seq(0,100,10)
-distances <- c("Jaccard","KS","Minkowski_0.5","Canberra","Minkowski_1.4","Euclidean","Minkowski_3")
+distances <- c("JI","JD","SMC","SMD","KS","Minkowski_0.5","Canberra","Minkowski_1.4","Euclidean","Minkowski_3")
 form=~Sex+Trt+IQ+Age
 nps <- 10000
 
@@ -111,7 +111,7 @@ for(sim in sims) {
   for(signal in signals) {
   #print(counter)
     for(distance in distances) {
-      DM <- paste0("Sim",sim,"_wt",sprintf("%03d",signal),ifelse(distance == "Jaccard","_top20_","_corr_"),distance)
+      DM <- paste0("Sim",sim,"_wt",sprintf("%03d",signal),ifelse(distance %in% c("JI","JD","SMC","SMD"),"_top20_","_corr_"),distance)
       y <- as.vector(as.data.frame(df)[,DM])
       if(distance=="KS") y <- log(y)
       
