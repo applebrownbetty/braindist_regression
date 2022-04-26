@@ -1,0 +1,130 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse) # for breathing
+library(readxl) # to read excel files into R
+library(R.matlab) # to read matlab files into R
+library(Matrix)
+
+diag1 <- function(X) {
+  diag(X) <- 1
+  return(X)
+}
+
+UT <- function(x) {
+  return(x[upper.tri(x)])
+}
+
+jaccard_d <- function(x,y) {
+  # calculates weighted Jaccard similarity between
+  # x and y (positive vectors of equal length)
+  if(length(x)!=length(y)) {
+    warning("vectors must be of the same length")
+  } else if(any(!(c(x,y) %in%  c(0,1)))) {
+    warning("all elements must be 0 or 1")
+  } else {
+    M_11 <- sum(x==1 & y==1)
+    M_01 <- sum(x==0 & y==1)
+    M_10 <- sum(x==1 & y==0)
+    Jaccard <- (M_01+M_10)/(M_01+M_10+M_11)
+    vec <- c(Jaccard)
+    names(vec) <- c("Jaccard Dist")    
+    return(t(vec))
+  }
+}
+
+##### ----- Data Read-in ----- #####
+
+# Read-in Demographic Data
+HCP_dem <- as.data.frame(read_excel("/isilon/datalake/lcbn_research/final/HCP/Demographics/Demographics_Restricted.xlsx"))
+rownames(HCP_dem) <- HCP_dem$Subject
+HCP_dem_unrestricted <- as.data.frame(read_csv("/isilon/datalake/lcbn_research/final/HCP/Demographics/Demographics_Unrestricted.csv"))
+rownames(HCP_dem_unrestricted) <- HCP_dem_unrestricted$Subject
+
+# Remove 17 Subjects due to missing data
+HCP_dem <- HCP_dem[row.names(HCP_dem_unrestricted),] # make sure rows match in dem dfs
+IDs <- row.names(HCP_dem)[
+  complete.cases(HCP_dem_unrestricted[,c("PMAT24_A_CR","Gender")]) & 
+    complete.cases(HCP_dem[,c("Age_in_Yrs","SSAGA_Educ","BMI","Race","Ethnicity","Handedness","SSAGA_Income","SSAGA_Alc_D4_Ab_Dx","SSAGA_Alc_D4_Dp_Dx","SSAGA_TB_Still_Smoking")])]
+
+# Remove 112 Subjects for QC
+IDs <- IDs[!(IDs %in% read.csv("/isilon/datalake/lcbn_research/final/HCP/Demographics/QC_badSubjects.csv")[,1])]
+
+### Read-in Connection Matrices ###
+
+# List all files available in the folder "Connection Matrices"
+connmat_files <- list.files("/isilon/datalake/lcbn_research/final/HCP/FTP/OriginalTransfer/")
+
+# remove 258 subjects that don't have connection matrices for rest and WM
+IDs <- IDs[paste0(IDs,"_rest_Aij.mat") %in% connmat_files &
+             paste0(IDs,"_WM_Aij.mat") %in% connmat_files]
+HCP_dem <- HCP_dem %>% filter(Subject %in% IDs)
+
+# Create Fam0 Variable -- Fam_ID if 2 or more people, 0 otherwise
+HCP_dem$Fam0 <- HCP_dem$Family_ID
+tmp <- table(HCP_dem$Fam0)
+HCP_dem$Fam0[HCP_dem$Family_ID %in% names(tmp[tmp==1])] <- 0
+
+# Create Twin0 Variable -- Fam_ID if part of a twin pair WITH scans for both, 0 otherwise
+HCP_dem$Twin0 <- ifelse(is.na(HCP_dem$ZygosityGT),0,HCP_dem$Family_ID)
+tmp <- table(HCP_dem$Twin0)
+HCP_dem$Twin0[HCP_dem$Family_ID %in% names(tmp[tmp==1])] <- 0
+
+# Build both a matrix and list with all subjects connection files
+rest_list <- WM_list <- list()
+rest_df <- rest_top005 <- WM_df <- WM_top005 <- matrix(nrow=length(IDs),ncol=choose(268,2),dimnames=list(IDs,NULL))
+for(id in IDs) {
+  rest_list[[id]] <- diag1(readMat(paste0("/isilon/datalake/lcbn_research/final/HCP/FTP/OriginalTransfer/",id,"_rest_Aij.mat"))$aij/(2^15))
+  rest_df[id,] <- UT(rest_list[[id]])
+  rest_top005[id,] <- rest_df[id,] > quantile(rest_df[id,],1-0.005)
+  
+  WM_list[[id]] <- diag1(readMat(paste0("/isilon/datalake/lcbn_research/final/HCP/FTP/OriginalTransfer/",id,"_WM_Aij.mat"))$aij/(2^15))
+  WM_df[id,] <- UT(WM_list[[id]])
+  WM_top005[id,] <- WM_df[id,] > quantile(WM_df[id,],1-0.005)
+}
+
+# Initialize df
+dist_df <- as.data.frame(matrix(NA,nrow=choose(length(IDs),2),ncol=1,dimnames = list(NULL,c("IDa"))))
+
+counter = 1
+
+for(ii in 1:(length(IDs)-1)) {
+  for(jj in (ii+1):length(IDs)) {
+    
+    i <- IDs[ii]
+    j <- IDs[jj]
+    
+    dist_df[counter,c("IDa","FamIDa","Fam0IDa","Twin0IDa")] <- HCP_dem[i,c("Subject","Family_ID","Fam0","Twin0")]
+    dist_df[counter,c("IDb","FamIDb","Fam0IDb","Twin0IDb")] <- HCP_dem[j,c("Subject","Family_ID","Fam0","Twin0")]
+    
+    dist_df[counter,"FluidIntl"] = abs(HCP_dem_unrestricted[i,"PMAT24_A_CR"] - HCP_dem_unrestricted[j,"PMAT24_A_CR"])
+    dist_df[counter,"Gender"] = 1*(HCP_dem_unrestricted[i,"Gender"] != HCP_dem_unrestricted[j,"Gender"])
+    dist_df[counter,"Age"] = abs(HCP_dem[i,"Age_in_Yrs"] - HCP_dem[j,"Age_in_Yrs"])
+    dist_df[counter,"Education"] = abs(HCP_dem[i,"SSAGA_Educ"] - HCP_dem[j,"SSAGA_Educ"])
+    dist_df[counter,"BMI"] = abs(HCP_dem[i,"BMI"] - HCP_dem[j,"BMI"])
+    dist_df[counter,"Race"] = 1*(HCP_dem[i,"Race"] != HCP_dem[j,"Race"])
+    dist_df[counter,"Ethnicity"] = 1*(HCP_dem[i,"Ethnicity"] != HCP_dem[j,"Ethnicity"])
+    dist_df[counter,"Handedness"] = abs(HCP_dem[i,"Handedness"] - HCP_dem[j,"Handedness"])
+    dist_df[counter,"Income"] = abs(HCP_dem[i,"SSAGA_Income"] - HCP_dem[j,"SSAGA_Income"])
+    dist_df[counter,"DSM4_Alc_Abuse"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Ab_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Ab_Dx"])
+    dist_df[counter,"DSM4_Alc_Dep"] = 1*(HCP_dem[i,"SSAGA_Alc_D4_Dp_Dx"] != HCP_dem[j,"SSAGA_Alc_D4_Dp_Dx"])
+    dist_df[counter,"SmokeStatus"] = 1*(HCP_dem[i,"SSAGA_TB_Still_Smoking"] != HCP_dem[j,"SSAGA_TB_Still_Smoking"])
+    
+    dist_df[counter,"JAC_WM"] = jaccard_d(WM_top005[i,],WM_top005[j,])
+    dist_df[counter,"EUC_WM"] = dist(rbind(WM_df[i,],WM_df[j,]),method = "euclidean")
+    dist_df[counter,"LERM_WM"] = pdDist(WM_list[[i]],WM_list[[j]],metric = "logEuclidean")
+    
+    dist_df[counter,"JAC_RS"] = jaccard_d(rest_top005[i,],rest_top005[j,])
+    dist_df[counter,"EUC_RS"] = dist(rbind(rest_df[i,],rest_df[j,]),method = "euclidean")
+    dist_df[counter,"LERM_RS"] = pdDist(rest_list[[i]],rest_list[[j]],metric = "logEuclidean")
+    
+    counter = counter + 1
+  }
+  print(counter/choose(819,2))
+}
+
+saveRDS(dist_df,"HCP_famdistdf.Rds")
+```
