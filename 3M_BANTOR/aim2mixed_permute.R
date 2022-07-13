@@ -40,7 +40,7 @@ task_ID <- as.numeric(files[as.numeric(Sys.getenv("SLURM_ARRAY_TASK_ID"))])
 print(task_ID)
 simIDs <- task_ID
 signals <- seq(0,100,10)
-distances <- c("JD_top005","JD_top20","logKS","EUC","LERM")
+distances <- c("JD_top005","JD_top20","logKS","EUC","PCD","LERM")
 
 dat_results <- data.frame(ID = rep(simIDs,each=5*length(signals)*length(distances)))
 

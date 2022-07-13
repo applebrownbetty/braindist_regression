@@ -32,6 +32,10 @@ jaccard_wt <- function(x,y) {
   }
 }
 
+cor_dist <- function(x,y) {
+  return((1-cor(x,y,method = "pearson"))/2)
+}
+
 binary_coefs <- function(x,y) {
   # calculates weighted Jaccard similarity between
   # x and y (positive vectors of equal length)
@@ -307,6 +311,9 @@ aim2simdat <- function(seed) {
             get(paste0("task",df$Task_IDA[counter],"_",df$Group_IDA[counter],"_deg"))[df$IDA[counter],],
             get(paste0("task",df$Task_IDB[counter],"_",df$Group_IDB[counter],"_deg"))[df$IDB[counter],]),
             method = "euclidean")
+          df[counter,"PCD"] <- cor_dist(
+            get(paste0("task",df$Task_IDA[counter],"_",df$Group_IDA[counter],"_deg"))[df$IDA[counter],],
+            get(paste0("task",df$Task_IDB[counter],"_",df$Group_IDB[counter],"_deg"))[df$IDB[counter],])
           # df[counter,"AIRM"] <- pdDist(
           #    get(paste0("task",df$Task_IDA[counter],"_",df$Group_IDA[counter],"_list"))[[df$IDA[counter]]], 
           #    get(paste0("task",df$Task_IDB[counter],"_",df$Group_IDB[counter],"_list"))[[df$IDB[counter]]], 
